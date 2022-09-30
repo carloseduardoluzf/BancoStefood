@@ -1,0 +1,221 @@
+create table login (
+	id_login SERIAL NOT NULL,
+	email VARCHAR(100) NOT NULL UNIQUE,
+	senha VARCHAR (8) NOT NULL,
+	PRIMARY KEY(id_login)
+	
+);
+
+create index idx_login_email on login(email);
+
+create table endereco(
+	id_endereco SERIAL NOT NULL,
+	cep VARCHAR(9) NOT NULL,
+	bairro VARCHAR(200) NOT NULL,
+	cidade VARCHAR(100) NOT NULL,
+	estado VARCHAR (30) NOT NULL,
+	rua VARCHAR (100) NOT NULL,
+	complemento VARCHAR(200) NOT NULL,
+	fk_endereco_loja INTEGER,
+	fk_endereco_cliente INTEGER,
+	FOREIGN KEY(fk_endereco_loja) REFERENCES loja(id_loja),
+	FOREIGN KEY(fk_endereco_cliente) REFERENCES cliente(id_cliente),
+	PRIMARY KEY(id_endereco)
+	
+);
+
+create index idx_endereco on endereco(cidade);
+
+create table status(
+	id_status SERIAL NOT NULL,
+	status_pedido VARCHAR(25) NOT NULL,
+	fk_status_pedido INTEGER,
+	PRIMARY KEY(id_status),
+	FOREIGN KEY(fk_status_pedido) REFERENCES pedido(id_pedido)
+);
+
+create table cliente (
+	id_cliente SERIAL NOT NULL,
+	cpf varchar(15) UNIQUE NOT NULL,
+	nome_completo VARCHAR(100) NOT NULL,
+	telefone VARCHAR(12) NOT NULL,
+	fk_cliente_login INTEGER,
+	fk_cliente_endereco INTEGER UNIQUE,
+	PRIMARY KEY(id_cliente),
+	FOREIGN KEY(fk_cliente_login) REFERENCES login(id_login),
+	FOREIGN KEY(fk_cliente_endereco) REFERENCES endereco(id_endereco)
+	
+);
+
+create index idx_cliente_cpf_nome on cliente(cpf, nome_completo);
+
+create table produto_pedido (
+	id_produto_pedido SERIAL NOT NULL,
+	fk_produto INTEGER,
+	fk_pedido INTEGER,
+	quantidade_produto INTEGER NOT NULL,
+	PRIMARY KEY(id_produto_pedido),
+	FOREIGN KEY(fk_produto) REFERENCES produto(cod_produto),
+	FOREIGN KEY(fk_pedido) REFERENCES pedido(id_pedido)
+	
+);
+
+create table pedido (
+	id_pedido SERIAL NOT NULL,
+	fk_pedido_cliente INTEGER,
+	fk_pedido_endereco INTEGER,
+	fk_pedido_loja INTEGER,
+	troco NUMERIC(6,2) NOT NULL,
+	data_ped DATE NOT NULL,
+	valor_total NUMERIC(6,2) NOT NULL,
+	PRIMARY KEY(id_pedido),
+	FOREIGN KEY(fk_pedido_loja) REFERENCES loja(id_loja),
+	FOREIGN KEY(fk_pedido_cliente) REFERENCES cliente(id_cliente),
+	FOREIGN KEY(fk_pedido_endereco) REFERENCES endereco(id_endereco),
+	
+);
+
+create table loja(
+	id_loja SERIAL NOT NULL,
+	cnpj VARCHAR(20) NOT NULL,
+	razao_social VARCHAR(100) NOT NULL,
+	email VARCHAR(100) NOT NULL,
+	nome_fantasia VARCHAR(100),
+	PRIMARY KEY(id_loja)
+	
+);
+
+create table faturamento(
+	id_faturamento SERIAL NOT NULL,
+	valor_fat NUMERIC(6,2),
+	data_fat DATE,
+	fk_faturamento_loja INTEGER,
+	qtd_pedidos INTEGER
+	PRIMARY KEY(id_faturamento),
+	FOREIGN KEY(fk_faturamento_loja) REFERENCES loja(id_loja),
+	
+);
+
+CREATE OR REPLACE VIEW dados_cliente AS
+	SELECT 
+	cliente.nome_completo     AS nome_cliente,
+	cliente.cpf,
+	cliente.telefone,
+	endereco.cep,
+	endereco.cidade,
+	login.id_login,
+	login.email
+
+	FROM cliente 
+
+	INNER JOIN endereco  
+		ON cliente.fk_cliente_endereco = cliente.id_cliente
+	INNER JOIN login 
+		ON cliente.fk_cliente_login = login.id_login;
+	
+CREATE OR REPLACE PROCEDURE calculaValorPedidosComLoja(v_data_fat DATE, fk_faturamento_loja INTEGER, v_fk_pedido_loja INTEGER, id_loja_que_soma INTEGER)
+
+LANGUAGE plpgsql
+AS $body$
+
+DECLARE
+v_valor_total NUMERIC(6,2);
+v_existe_registro BIGINT;
+BEGIN
+
+SELECT COUNT(*) INTO v_existe_registro FROM faturamento WHERE data_fat = v_data_fat;
+
+SELECT COUNT(id_pedido) INTO v_fk_pedido_loja FROM pedido where fk_pedido_loja = v_fk_pedido_loja;
+
+SELECT SUM(valor_total) INTO v_valor_total 
+FROM pedido 
+WHERE fk_pedido_loja = id_loja_que_soma GROUP BY id_loja_que_soma, v_valor_total;
+
+INSERT INTO faturamento(valor_fat, data_fat, fk_faturamento_loja, qtd_pedidos) values (v_valor_total, v_data_fat, fk_faturamento_loja, v_fk_pedido_loja);
+
+IF v_existe_registro >= 1 THEN
+ROLLBACK;
+RAISE NOTICE 'FATURAMENTO JÁ REALIZADO! - ROLLBACK';
+
+ELSE
+
+COMMIT;
+
+END IF;
+END;
+
+$body$
+;
+
+CREATE OR REPLACE FUNCTION formataCep(p_cep VARCHAR) RETURNS VARCHAR
+
+LANGUAGE plpgsql
+AS $function$
+BEGIN
+
+IF LENGTH(p_cep) < 8 AND LENGTH(p_cep) > 9 THEN
+
+RETURN 'CEP inválido, verifique o cep inserido!';
+
+ELSE
+
+UPDATE endereco SET cep = REGEXP_REPLACE(p_cep, '([0-9]{5})([0-9]{3})', '\1-\2') WHERE cep = p_cep;
+
+RETURN 'CEP formatado com sucesso!';
+
+END IF;
+
+END
+
+$function$
+;
+
+CREATE OR REPLACE FUNCTION validaEmail(email VARCHAR) RETURNS BOOLEAN
+LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+  email ALIAS FOR $1; 
+BEGIN 
+
+  IF email !~ '^[A-Za-z0-9._%-]+@[A-Za-z0-9.-]+[.][A-Za-z]+$' THEN
+
+    RAISE EXCEPTION 'Verifique o email, possui caracteres inválidos: %', $1;
+	
+  ELSE
+  	
+  	RETURN TRUE;
+	
+	
+
+  END IF; 
+
+END
+$function$; 
+
+CREATE OR REPLACE PROCEDURE cadastraLogin(v_email VARCHAR, v_senha VARCHAR)
+
+LANGUAGE plpgsql
+AS $body$
+
+BEGIN
+
+IF validaemail(v_email) THEN
+
+	INSERT INTO login(email, senha) values (v_email, v_senha);
+	
+ELSE
+
+	RAISE EXCEPTION 'Não foi possível realizar o cadastro, email inválido!';
+
+END IF;
+END;
+$body$
+;
+
+
+
+
+
+
+
